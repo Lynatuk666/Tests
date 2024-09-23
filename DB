@@ -1,0 +1,201 @@
+from sqlalchemy import Column, Text, Integer, ForeignKey, PrimaryKeyConstraint, Null
+from sqlalchemy.orm import relationship, declarative_base, sessionmaker
+from sqlalchemy.exc import IntegrityError, SQLAlchemyError
+from psycopg2.errors import UniqueViolation
+import sqlalchemy as sa
+import psycopg2
+
+# тут нужно название БД с которой будем работать и пароль от суперпользователя
+password = "admin"
+DB_name = "vk_bots"
+
+Base = declarative_base()
+engine = sa.create_engine(f"postgresql://postgres:admin@localhost:5432/vk_bots", echo=True).connect()
+session = sessionmaker(binds={Base: engine, }, expire_on_commit=False)()
+
+# Создаем таблицы
+class User(Base):
+    __tablename__ = "user"
+
+    user_id = Column(Text, primary_key=True)
+    name = Column(Text, nullable=False, default=" ")
+    city = Column(Text, nullable=False, default="Анк-Морпорк")
+    gender = Column(Text, nullable=False, default="Не указан")
+    age = Column(Integer, nullable=False, default=0)
+
+    prompts = relationship("UserPrompt", backref="user", cascade="all, delete")
+    ban = relationship("Banned", backref="user", cascade="all, delete")
+    like = relationship("Liked", backref="user", cascade="all, delete")
+
+class UserPrompt(Base):
+    __tablename__ = "user_prompt"
+
+    # id = Column(Integer, primary_key=True, nullable=False, autoincrement=True)
+    user_id = Column(Text, ForeignKey("user.user_id"), nullable=False, primary_key=True)
+    city_for_search = Column(Text, nullable=False, default="Анк-Морпорк")
+    gender_for_search = Column(Text, nullable=False, default="Не указан")
+    age_for_search = Column(Integer, nullable=False, default=0)
+
+
+class Liked(Base):
+    __tablename__ = "liked"
+
+    # option_id = Column(Integer, primary_key=True, autoincrement=True)
+    user_id = Column(Text, ForeignKey("user.user_id"), primary_key=True, nullable=False)
+    liked_user_id = Column(Text, primary_key=True, nullable=False)
+
+    PrimaryKeyConstraint("user_id", "liked_user_id", name="uq_like")
+
+class Banned(Base):
+    __tablename__ = "banned"
+
+    # option_id = Column(Integer, primary_key=True, autoincrement=True)
+    user_id = Column(Text, ForeignKey("user.user_id"), primary_key=True, nullable=False)
+    banned_user_id = Column(Text, primary_key=True, nullable=False)
+
+    PrimaryKeyConstraint("user_id", "banned_user_id", name="uq_ban")
+
+class DB:
+    """Class for initialization and work with Data base"""
+    def __init__(self):
+        pass
+        # try:
+        #     self.connection()
+        #     print("соединение установлено")
+        # except Exception as e:
+        #     print(e)
+
+    def connection(self):  # устанавливаем соединение через Супер пользователя
+        try:
+            conn = psycopg2.connect(
+                dbname="postgres",
+                user="postgres",
+                password=password,
+                host="localhost",
+                port="5432"
+            )
+            conn.autocommit = True
+            print("соеденение")
+            return conn
+        except Exception as e:
+            print(e)
+
+    def create_db(self):  # создание новой БД с нашим названием
+        with self.connection().cursor() as cur:
+            try:
+                cur.execute(f"CREATE DATABASE {DB_name};")
+                print("База данных успешно создана")
+                self.connection().commit()
+                self.connection().close()
+            except psycopg2.errors.DuplicateDatabase:
+                print("База данных уже существует")
+
+    def create_tables(self):  # создаем новые таблицы
+        Base.metadata.create_all(engine)
+        session.commit()
+        print("Таблицы созданы")
+
+    def drop_tables(self):  # удаляем все из БД
+        Base.metadata.drop_all(engine)
+        session.commit()
+        print("Таблицы удалены")
+
+    def create_user(self, user):
+        try:
+            with session as s:
+                s.add(user)
+                s.commit()
+                print("Пользователь Добавлен")
+
+        except IntegrityError as e:
+            assert isinstance(e.orig, UniqueViolation)
+            print("Такой пользователь уже существует")
+
+    def delete_user(self, id_to_delete):
+        try:
+            with session as s:
+                user_to_delete = s.query(User).filter_by(user_id=id_to_delete).first()
+                s.delete(user_to_delete)
+                s.commit()
+
+        # except psycopg2.errors.UniqueViolation:
+        #     print("такой пользователь не существует")
+        except SQLAlchemyError:
+            print("такой пользователь не существует")
+
+    def crete_prompt(self, prompt):
+        try:
+            with session as s:
+                s.add(prompt)
+                s.commit()
+                print("Запрос добавлен")
+
+        except IntegrityError as e:
+            assert isinstance(e.orig, UniqueViolation)
+            print("Пользователь уже добавил запрос")
+
+    def like(self, user, who_liked):
+        try:
+            with session as s:
+                like = Liked(user_id=user, liked_user_id=who_liked)
+                s.add(like)
+                s.commit()
+                print("Лайк добавлен")
+
+        except IntegrityError as e:
+            print(e)
+
+    def unlike(self, user, user_for_unlike):
+        try:
+            with session as s:
+                unlike = s.query(Liked).filter_by(user_id=user, banned_user_id=user_for_unlike).first()
+                s.delete(unlike)
+                s.commit()
+                print("Лайк убран")
+
+        except IntegrityError as e:
+            print(e)
+
+    def ban(self, user, user_for_ban):
+        try:
+            with session as s:
+                ban = Banned(user_id=user, banned_user_id=user_for_ban)
+                s.add(ban)
+                s.commit()
+                print("Бан добавлен")
+
+        except IntegrityError as e:
+            print(e)
+
+    def unban(self, user, user_for_unban):
+        try:
+            with session as s:
+                unban = s.query(Banned).filter_by(user_id=user, banned_user_id=user_for_unban).first()
+                s.delete(unban)
+                s.commit()
+                print("Бан убран")
+
+        except IntegrityError as e:
+            print(e)
+
+
+if __name__ == "__main__":
+    pass
+    test_db = DB()
+    try:
+        # test_db.unban("14", "22")
+        New_User = User(user_id=14, name="Vanya", city="moskow", gender="male", age=26)
+        # test_db.delete_user(New_User)
+        # test_db.drop_tables()
+        test_db.create_db()
+        test_db.create_tables()
+        # test_db.create_user(New_User)
+        # new_prompt = UserPrompt(user_id=14, city="almaty", gender="female" , age="20")
+        # test_db.crete_prompt(new_prompt)
+        # user_2 = User(user_id=22, name="Masha", city="almaty", gender="female", age=20)
+        # test_db.create_user(user_2)
+        # test_db.like(14, 22)
+        # test_db.unban(14,22)
+    except Exception as e:
+        print(e)
+
